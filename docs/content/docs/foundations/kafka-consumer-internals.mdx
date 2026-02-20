@@ -1,0 +1,105 @@
+---
+title: Kafka Consumer Internals
+description: "Consumer groups, offsets, rebalancing, and franz-go's pure Go implementation."
+---
+
+# Kafka Consumer Internals
+
+Isotope uses Kafka as its primary source and sink connector. This chapter explains
+the key concepts behind Kafka consumption and how franz-go implements them.
+
+## Consumer Groups
+
+A **consumer group** is a set of consumers that cooperatively consume from a topic's
+partitions. Each partition is assigned to exactly one consumer in the group:
+
+```
+Topic: ad-events (12 partitions)
+
+Consumer Group: "ysb-benchmark"
+├── Consumer 1: partitions [0, 1, 2, 3]
+├── Consumer 2: partitions [4, 5, 6, 7]
+└── Consumer 3: partitions [8, 9, 10, 11]
+```
+
+When a consumer joins or leaves, Kafka **rebalances** — redistributing partitions.
+
+## Offsets
+
+Each message in a partition has a sequential **offset**. Consumers track their position:
+
+```
+Partition 0: [msg0, msg1, msg2, msg3, msg4, msg5, ...]
+                                  ^
+                            committed offset = 3
+```
+
+Startup modes:
+- **earliest-offset**: Start from the beginning of each partition
+- **latest-offset**: Start from the most recent message
+- **group-offsets**: Resume from the last committed offset
+
+## Rebalancing
+
+When the consumer group membership changes:
+
+1. Kafka triggers a rebalance
+2. All consumers stop fetching
+3. A new partition assignment is computed
+4. Consumers resume from their committed offsets
+
+This is the most complex part of Kafka consumption. Cooperative rebalancing
+(used by franz-go) minimizes disruption by only revoking partitions that need
+to move.
+
+## franz-go: Pure Go Kafka Client
+
+Isotope uses [franz-go](https://github.com/twmb/franz-go) instead of the C-based
+librdkafka. Benefits:
+
+- **No CGO**: Compiles as a pure Go binary, no C dependencies
+- **Modern API**: Context-based cancellation, generics support
+- **Performance**: Competitive with librdkafka for most workloads
+- **Simplicity**: Single dependency, no JNI or FFI bridges
+
+## Isotope's Kafka Source
+
+The Kafka source connector:
+
+```go
+type KafkaSource struct {
+    client     *kgo.Client
+    schema     *arrow.Schema
+    format     string
+}
+
+func (k *KafkaSource) Run(ctx *Context, out chan<- arrow.Record) error {
+    defer close(out)
+    for {
+        fetches := k.client.PollFetches(ctx.Ctx)
+        // Convert JSON records → Arrow RecordBatch
+        batch := k.deserialize(fetches)
+        out <- batch
+    }
+}
+```
+
+Each poll returns a batch of records that are deserialized from JSON into Arrow
+RecordBatches, amortizing deserialization overhead across many rows.
+
+## Kafka Sink and Delivery Guarantees
+
+The Kafka sink serializes Arrow RecordBatches back to JSON and produces them:
+
+```go
+func (k *KafkaSink) WriteBatch(batch arrow.Record) error {
+    for row := 0; row < int(batch.NumRows()); row++ {
+        record := serializeRow(batch, row)
+        k.client.Produce(ctx, record, nil)
+    }
+    return k.client.Flush(ctx)  // Wait for all acks
+}
+```
+
+The `Flush()` call ensures all records in the batch have been acknowledged by
+Kafka before the sink reports success — providing at-least-once delivery.

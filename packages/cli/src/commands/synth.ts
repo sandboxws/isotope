@@ -6,7 +6,7 @@ import {
   resolveProjectContext,
   loadPipeline,
 } from '../discovery.js';
-import { synthesizeApp, SynthContext } from '@isotope/dsl';
+import { synthesizeApp, SynthContext, compilePlan } from '@isotope/dsl';
 import type { PipelineArtifact, ConstructNode, ValidationDiagnostic } from '@isotope/dsl';
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -131,10 +131,17 @@ function writePipelineOutput(
   const pipelineDir = join(projectDir, outdir, result.name);
   mkdirSync(pipelineDir, { recursive: true });
 
-  // Write the construct tree as JSON
-  // TODO: Replace with Protobuf serialization when plan-compiler is implemented
+  // Write the construct tree as JSON (for debugging/inspection)
   const planJson = JSON.stringify(result.tree, null, 2);
   writeFileSync(join(pipelineDir, 'plan.json'), planJson, 'utf-8');
+
+  // Compile to Protobuf ExecutionPlan and write binary .pb file
+  try {
+    const { binary } = compilePlan(result.tree, { sourceFile: result.name });
+    writeFileSync(join(pipelineDir, 'plan.pb'), binary);
+  } catch (err) {
+    console.log(pc.yellow(`  Warning: Protobuf compilation skipped for ${result.name}: ${(err as Error).message}`));
+  }
 }
 
 // ── Error reporting ─────────────────────────────────────────────────

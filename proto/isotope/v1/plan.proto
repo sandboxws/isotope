@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package isotope.v1;
+
+import "isotope/v1/schema.proto";
+import "isotope/v1/operators.proto";
+
+option go_package = "github.com/sandboxws/isotope/runtime/internal/proto/isotopev1";
+
+// ── Top-level execution plan ────────────────────────────────────────
+
+message ExecutionPlan {
+  string pipeline_name = 1;
+  int32 default_parallelism = 2;
+  PipelineMode mode = 3;
+  CheckpointConfig checkpoint = 4;
+  StateConfig state = 5;
+  RestartConfig restart = 6;
+  repeated OperatorNode operators = 7;
+  repeated Edge edges = 8;
+}
+
+// ── Pipeline configuration enums ────────────────────────────────────
+
+enum PipelineMode {
+  PIPELINE_MODE_UNSPECIFIED = 0;
+  PIPELINE_MODE_STREAMING = 1;
+  PIPELINE_MODE_BATCH = 2;
+}
+
+message CheckpointConfig {
+  string interval = 1;
+  string mode = 2; // "exactly-once" | "at-least-once"
+}
+
+message StateConfig {
+  string backend = 1; // "pebble" | "memory"
+  string ttl = 2;
+}
+
+message RestartConfig {
+  string type = 1; // "fixed-delay" | "failure-rate" | "no-restart"
+  int32 attempts = 2;
+  string delay = 3;
+}
+
+// ── Operator node ───────────────────────────────────────────────────
+
+enum OperatorType {
+  OPERATOR_TYPE_UNSPECIFIED = 0;
+  // Sources
+  OPERATOR_TYPE_KAFKA_SOURCE = 1;
+  OPERATOR_TYPE_GENERATOR_SOURCE = 2;
+  // Sinks
+  OPERATOR_TYPE_KAFKA_SINK = 10;
+  OPERATOR_TYPE_CONSOLE_SINK = 11;
+  // Stateless transforms
+  OPERATOR_TYPE_FILTER = 20;
+  OPERATOR_TYPE_MAP = 21;
+  OPERATOR_TYPE_FLAT_MAP = 22;
+  OPERATOR_TYPE_RENAME = 23;
+  OPERATOR_TYPE_DROP = 24;
+  OPERATOR_TYPE_CAST = 25;
+  OPERATOR_TYPE_UNION = 26;
+  OPERATOR_TYPE_ROUTE = 27;
+  OPERATOR_TYPE_COALESCE = 28;
+  OPERATOR_TYPE_ADD_FIELD = 29;
+  // Stateful transforms
+  OPERATOR_TYPE_AGGREGATE = 40;
+  OPERATOR_TYPE_DEDUPLICATE = 41;
+  OPERATOR_TYPE_TOP_N = 42;
+  // Windows
+  OPERATOR_TYPE_TUMBLE_WINDOW = 50;
+  OPERATOR_TYPE_SLIDE_WINDOW = 51;
+  OPERATOR_TYPE_SESSION_WINDOW = 52;
+  // Joins
+  OPERATOR_TYPE_HASH_JOIN = 60;
+  OPERATOR_TYPE_TEMPORAL_JOIN = 61;
+  OPERATOR_TYPE_LOOKUP_JOIN = 62;
+  OPERATOR_TYPE_INTERVAL_JOIN = 63;
+  // Escape hatches
+  OPERATOR_TYPE_RAW_SQL = 70;
+  OPERATOR_TYPE_MATCH_RECOGNIZE = 71;
+}
+
+enum ExecutionStrategy {
+  EXECUTION_STRATEGY_UNSPECIFIED = 0;
+  EXECUTION_STRATEGY_ARROW_NATIVE = 1;
+  EXECUTION_STRATEGY_DUCKDB_MICRO_BATCH = 2;
+}
+
+enum ChangelogMode {
+  CHANGELOG_MODE_UNSPECIFIED = 0;
+  CHANGELOG_MODE_APPEND_ONLY = 1;
+  CHANGELOG_MODE_RETRACT = 2;
+  CHANGELOG_MODE_UPSERT = 3;
+}
+
+message SourceLocation {
+  string file = 1;
+  int32 line = 2;
+  int32 column = 3;
+}
+
+message OperatorNode {
+  string id = 1;
+  OperatorType operator_type = 2;
+  string name = 3;
+  int32 parallelism = 4;
+  Schema input_schema = 5;
+  Schema output_schema = 6;
+  ChangelogMode changelog_mode = 7;
+  SourceLocation source_location = 8;
+  ExecutionStrategy execution_strategy = 9;
+
+  // Operator-specific configuration — exactly one must be set.
+  oneof config {
+    // Sources
+    KafkaSourceConfig kafka_source = 100;
+    GeneratorSourceConfig generator_source = 101;
+    // Sinks
+    KafkaSinkConfig kafka_sink = 110;
+    ConsoleSinkConfig console_sink = 111;
+    // Stateless transforms
+    FilterConfig filter = 120;
+    MapConfig map = 121;
+    FlatMapConfig flat_map = 122;
+    RenameConfig rename = 123;
+    DropConfig drop = 124;
+    CastConfig cast = 125;
+    UnionConfig union = 126;
+    RouteConfig route = 127;
+    CoalesceConfig coalesce = 128;
+    AddFieldConfig add_field = 129;
+    // Stateful transforms
+    AggregateConfig aggregate = 140;
+    DeduplicateConfig deduplicate = 141;
+    TopNConfig top_n = 142;
+    // Windows
+    TumbleWindowConfig tumble_window = 150;
+    SlideWindowConfig slide_window = 151;
+    SessionWindowConfig session_window = 152;
+    // Joins
+    HashJoinConfig hash_join = 160;
+    TemporalJoinConfig temporal_join = 161;
+    LookupJoinConfig lookup_join = 162;
+    IntervalJoinConfig interval_join = 163;
+    // Escape hatches
+    RawSQLConfig raw_sql = 170;
+    MatchRecognizeConfig match_recognize = 171;
+  }
+}
+
+// ── Edge (connection between operators) ─────────────────────────────
+
+enum ShuffleStrategy {
+  SHUFFLE_STRATEGY_UNSPECIFIED = 0;
+  SHUFFLE_STRATEGY_FORWARD = 1;
+  SHUFFLE_STRATEGY_HASH = 2;
+  SHUFFLE_STRATEGY_BROADCAST = 3;
+  SHUFFLE_STRATEGY_ROUND_ROBIN = 4;
+  SHUFFLE_STRATEGY_RANGE = 5;
+}
+
+message Edge {
+  string from_operator = 1;
+  string to_operator = 2;
+  ShuffleStrategy shuffle = 3;
+  repeated string partition_keys = 4;
+}

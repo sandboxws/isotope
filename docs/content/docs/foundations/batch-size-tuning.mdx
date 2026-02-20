@@ -1,0 +1,98 @@
+---
+title: Batch Size Tuning
+description: "Amortization, GC pressure, cache locality, and latency percentiles."
+---
+
+# Batch Size Tuning
+
+The batch size — how many rows flow through each Arrow RecordBatch — is the single
+most important performance knob in a columnar streaming system.
+
+## The Amortization Principle
+
+Every batch carries fixed overhead:
+- Channel send/receive synchronization
+- Function call dispatch
+- Memory allocation/deallocation
+
+With batch size 1 (row-at-a-time), this overhead dominates. With batch size 4096,
+the overhead is amortized across 4096 rows:
+
+```
+Overhead per row = Fixed cost / Batch size
+
+Batch size 1:    1000ns / 1    = 1000ns/row
+Batch size 1024: 1000ns / 1024 = ~1ns/row
+Batch size 4096: 1000ns / 4096 = ~0.24ns/row
+```
+
+## GC Pressure
+
+Larger batches mean fewer allocations per second:
+
+```
+At 1M rows/sec:
+  Batch size 1:    1,000,000 allocations/sec  (GC nightmare)
+  Batch size 1024: ~977 allocations/sec       (manageable)
+  Batch size 8192: ~122 allocations/sec       (minimal GC)
+```
+
+Arrow's manual reference counting helps, but the Go GC still tracks the
+`arrow.Record` wrapper objects. Fewer objects = shorter GC pauses.
+
+## Cache Locality
+
+Modern CPUs have a cache hierarchy:
+
+```
+L1 cache: ~32KB, ~1ns access
+L2 cache: ~256KB, ~3ns access
+L3 cache: ~8MB, ~10ns access
+DRAM:     ~100ns access
+```
+
+A batch of 4096 Int64 values = 32KB — fits perfectly in L1 cache. Processing
+it column-by-column means sequential memory access with perfect prefetching.
+
+A batch of 1M values = 8MB — spills to L3. Cache misses add up.
+
+## The Latency Tradeoff
+
+Larger batches improve throughput but increase latency:
+
+```
+Batch size 1:    Latency ≈ 0ms    Throughput: low
+Batch size 1024: Latency ≈ 1ms    Throughput: high
+Batch size 8192: Latency ≈ 8ms    Throughput: very high
+Batch size 65536: Latency ≈ 65ms  Throughput: maximum
+```
+
+For real-time applications, p99 latency matters more than average throughput.
+Isotope defaults to batch size 1024 — a balance between throughput and latency.
+
+## Tail Latency and Percentiles
+
+Average latency hides problems. Always measure percentiles:
+
+- **p50** (median): Half of batches are faster than this
+- **p95**: 1 in 20 batches is slower
+- **p99**: 1 in 100 batches is slower
+- **p99.9**: 1 in 1000 — often dominated by GC pauses
+
+A system with p50=1ms and p99=500ms is much worse than p50=5ms and p99=10ms.
+
+## Isotope's Defaults
+
+| Setting | Default | Rationale |
+|---------|---------|-----------|
+| Source batch size | 1024 | Fits in L1 cache for Int64 columns |
+| Channel buffer | 1024 batches | Absorbs short burst without backpressure |
+| Generator tick | Adaptive | Matches configured rows/sec target |
+
+## Tuning Guidelines
+
+1. **Start with 1024** — it's a good default for most workloads
+2. **Measure p99 latency** — if too high, reduce batch size
+3. **Measure throughput** — if too low, increase batch size
+4. **Watch GC pauses** — if p99.9 spikes, reduce batch count (not size)
+5. **Profile** — use `go tool pprof` to find the actual bottleneck

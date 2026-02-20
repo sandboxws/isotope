@@ -1,0 +1,99 @@
+---
+title: Benchmarking Streaming Systems
+description: "YSB design, metrics collection, and Coordinated Omission."
+---
+
+# Benchmarking Streaming Systems
+
+Benchmarking a streaming system is harder than benchmarking a database query.
+Data flows continuously, latency is a distribution, and measurement itself
+can distort results.
+
+## The Yahoo Streaming Benchmark (YSB)
+
+YSB is the standard benchmark for stream processing systems, designed by Yahoo
+in 2015. It simulates an ad-tech pipeline:
+
+```
+Ad events → Filter(view) → Map(ad_id) → Window(10s) → Count → Output
+```
+
+Schema:
+```json
+{
+  "ad_id": "campaign_0042",
+  "ad_type": "banner",
+  "event_type": "view",
+  "event_time": 1708300000000,
+  "ip_address": "192.168.1.1"
+}
+```
+
+The benchmark measures:
+- **Throughput**: Events processed per second (sustained)
+- **Latency**: Time from event generation to output emission
+
+## Key Metrics
+
+### Throughput
+- Measured in events/second
+- Must be **sustained** — burst throughput is misleading
+- Report the rate at which the system keeps up without growing backlog
+
+### Latency Percentiles
+- **p50**: Typical experience
+- **p95**: Occasional slowdown
+- **p99**: Worst case for most users
+- **p99.9**: Tail latency (often GC or I/O related)
+
+### Resource Usage
+- **Memory**: Heap size, RSS, Arrow buffer pool size
+- **CPU**: User time, system time, GC time percentage
+- **GC**: Pause frequency, pause duration distribution
+
+## Coordinated Omission
+
+The most common benchmarking mistake. When the system is slow, the generator
+slows down too — hiding the true latency:
+
+```
+Intended:  Event at t=0, t=1ms, t=2ms, t=3ms, ...
+Actual:    Event at t=0, (system busy for 50ms), t=50ms, t=51ms, ...
+```
+
+The events that *would have* been generated during the 50ms stall are missing
+from the latency measurement. This makes the system appear faster than it is.
+
+**Solution**: Generate events at a fixed rate regardless of processing speed.
+If the system falls behind, queue up events and measure their latency from
+when they *should* have been processed.
+
+Isotope's YSB generator uses a fixed-rate ticker — events are timestamped
+at generation time, not processing time.
+
+## Isotope's Benchmark Setup
+
+```
+┌─────────────┐     ┌───────┐     ┌──────────────┐
+│ ysb-generator│ ──→ │ Kafka │ ──→ │ isotope-runtime│
+│ (configurable│     │(3 brokers)│ │ (YSB pipeline) │
+│  event rate) │     └───────┘     └──────┬───────┘
+└─────────────┘                           │
+                                          ▼
+                                    ┌──────────┐
+                                    │ Prometheus│ ──→ Grafana
+                                    └──────────┘
+```
+
+Run at three rates: 100K, 500K, and 1M events/sec for 60 seconds each.
+
+## What to Report
+
+A benchmark report should include:
+
+1. **Hardware**: CPU model, cores, memory, disk
+2. **Configuration**: Batch size, parallelism, JVM/Go version
+3. **Sustained throughput**: Events/sec over the full duration
+4. **Latency distribution**: p50, p95, p99, p99.9
+5. **Resource usage**: Peak memory, average CPU, GC pause distribution
+6. **Methodology**: How events were generated, how latency was measured

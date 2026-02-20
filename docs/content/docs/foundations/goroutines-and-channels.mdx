@@ -1,0 +1,100 @@
+---
+title: Goroutines & Channels
+description: "Go's concurrency model: M:N scheduling, channel semantics, select, and WaitGroups."
+---
+
+# Goroutines & Channels
+
+Isotope's runtime executes each operator as one or more goroutines connected by channels.
+This chapter explains the Go concurrency primitives that make this possible.
+
+## M:N Scheduling
+
+Go uses an **M:N scheduler**: M goroutines are multiplexed onto N OS threads. The runtime
+manages a pool of OS threads (defaulting to `GOMAXPROCS`, typically the number of CPU cores)
+and schedules goroutines cooperatively at certain points (function calls, channel operations,
+`runtime.Gosched()`).
+
+```
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│ Goroutine 1 │  │ Goroutine 2 │  │ Goroutine 3 │  ... (thousands)
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       │                │                │
+       ▼                ▼                ▼
+┌──────────────────────────────────────────────┐
+│              Go Scheduler (M:N)              │
+└──────┬──────────────┬──────────────┬─────────┘
+       │              │              │
+       ▼              ▼              ▼
+  [OS Thread 1]  [OS Thread 2]  [OS Thread 3]
+```
+
+In Isotope, each operator instance runs as a goroutine. With 10 operators at parallelism 4,
+that's 40 goroutines — trivially managed by Go's scheduler.
+
+## Channels: Typed Conduits
+
+Channels are Go's primary mechanism for goroutine communication. They are typed, bounded queues
+with built-in synchronization.
+
+```go
+// Buffered channel: up to 1024 RecordBatches can be queued
+out := make(chan arrow.Record, 1024)
+```
+
+Key properties:
+- **Blocking sends/receives**: If the buffer is full, the sender blocks until space is available
+- **Close semantics**: A closed channel can still be drained; `range` loops terminate on close
+- **Single-ownership**: The sender closes the channel, the receiver drains it
+
+In Isotope's engine, each edge in the DAG becomes a channel connecting two operator goroutines.
+
+## The `select` Statement
+
+`select` multiplexes across multiple channels, enabling non-blocking polling and timeout patterns:
+
+```go
+select {
+case batch := <-input:
+    // Process the batch
+    processBatch(batch)
+case <-ctx.Done():
+    // Shutdown signal received
+    return nil
+}
+```
+
+Isotope operators use `select` to simultaneously listen for:
+1. Incoming data batches
+2. Shutdown signals (context cancellation)
+3. Watermark/checkpoint barriers
+
+## WaitGroups for Barrier Synchronization
+
+`sync.WaitGroup` provides barrier synchronization — wait for a group of goroutines to complete:
+
+```go
+var wg sync.WaitGroup
+for _, op := range operators {
+    wg.Add(1)
+    go func(op Operator) {
+        defer wg.Done()
+        op.Run(ctx)
+    }(op)
+}
+wg.Wait() // Block until all operators finish
+```
+
+The Isotope engine uses WaitGroups during graceful shutdown to ensure all operators have
+drained their channels before the process exits.
+
+## How Isotope Uses These Primitives
+
+The engine builds the operator DAG as follows:
+
+1. **Create channels** for each edge in the execution plan
+2. **Launch goroutines** for each operator, passing input/output channels
+3. **Source goroutines** produce records and close their output channels when done
+4. **Transform goroutines** read from input, process, and write to output
+5. **Sink goroutines** read from input and write to external systems
+6. **Shutdown**: Cancel context → sources stop → channels drain → sinks finish → WaitGroup completes

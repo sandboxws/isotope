@@ -1,0 +1,107 @@
+---
+title: Protobuf as Contract
+description: "IDL design, field numbers, wire format, and schema evolution between TypeScript and Go."
+---
+
+# Protobuf as Contract
+
+Isotope uses Protocol Buffers as the cross-language contract between the TypeScript DSL
+and the Go runtime. The `.proto` files define the ExecutionPlan — the compiled form of
+a streaming pipeline.
+
+## Why Protobuf?
+
+The TypeScript DSL compiles pipelines; the Go runtime executes them. They need a shared
+format that is:
+
+- **Language-neutral**: Generated code for both TypeScript and Go
+- **Binary-efficient**: Compact wire format for fast serialization
+- **Schema-evolved**: Fields can be added without breaking existing plans
+- **Strongly typed**: Each operator config is a distinct message type
+
+## IDL Design
+
+Isotope's proto files follow a layered design:
+
+```
+proto/isotope/v1/
+├── plan.proto       # ExecutionPlan, OperatorNode, Edge
+├── operators.proto  # All operator configs (FilterConfig, MapConfig, ...)
+└── schema.proto     # Schema, SchemaField, ArrowType enum
+```
+
+The `OperatorNode` uses a `oneof` for operator-specific config:
+
+```protobuf
+message OperatorNode {
+  string id = 1;
+  OperatorType operator_type = 2;
+  // ...
+  oneof config {
+    KafkaSourceConfig kafka_source = 100;
+    FilterConfig filter = 120;
+    MapConfig map = 121;
+    // ... 25+ operator types
+  }
+}
+```
+
+Field numbers are grouped by category (sources: 100s, sinks: 110s, transforms: 120s)
+leaving room for future additions.
+
+## Field Numbers and Wire Format
+
+Each field has a permanent number that identifies it on the wire:
+
+```protobuf
+message FilterConfig {
+  string condition_sql = 1;  // field number 1, wire type 2 (length-delimited)
+}
+```
+
+The wire format is `(field_number << 3) | wire_type`, followed by the value.
+Field numbers are permanent — never reuse or change them.
+
+## Schema Evolution
+
+Protobuf supports forward/backward compatibility:
+
+- **Adding fields**: New fields get new numbers; old readers skip unknown fields
+- **Removing fields**: Old field numbers are reserved; new readers use defaults
+- **Default values**: Zero values are implicit — strings default to `""`, numbers to `0`
+
+This means Isotope can add new operator types or config fields without breaking
+existing compiled plans.
+
+## Code Generation
+
+Isotope uses `buf` to generate code from `.proto` files:
+
+- **TypeScript** (`@bufbuild/protobuf`): `create(SchemaObj, init)` → `toBinary()` → `Uint8Array`
+- **Go** (`protoc-gen-go`): `proto.Unmarshal(bytes, &plan)` → typed struct
+
+The `buf.gen.yaml` configuration:
+
+```yaml
+plugins:
+  - local: protoc-gen-es       # TypeScript generation
+    out: packages/dsl/src/generated
+  - local: protoc-gen-go       # Go generation
+    out: runtime/internal/proto
+```
+
+## The Compile Flow
+
+```
+TSX Pipeline Code
+    ↓ (JSX runtime)
+ConstructNode Tree
+    ↓ (plan-compiler.ts)
+ExecutionPlan protobuf message
+    ↓ (toBinary())
+plan.pb file (binary)
+    ↓ (Go runtime loads)
+*pb.ExecutionPlan struct
+    ↓ (engine builds DAG)
+Running pipeline
+```

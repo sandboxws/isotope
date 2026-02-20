@@ -1,0 +1,107 @@
+---
+title: Arrow Memory Management
+description: "Retain/Release reference counting, allocators, pool reuse, and leak detection."
+---
+
+# Arrow Memory Management
+
+Arrow Go uses manual reference counting for memory management. This gives predictable
+performance (no GC pauses for large arrays) but requires discipline.
+
+## Reference Counting: Retain/Release
+
+Every Arrow Array and RecordBatch has a reference count starting at 1:
+
+```go
+// Builder creates an array with refcount = 1
+arr := builder.NewArray()  // refcount = 1
+
+arr.Retain()    // refcount = 2
+arr.Release()   // refcount = 1
+arr.Release()   // refcount = 0 → memory freed
+```
+
+**The rule**: If you store or pass an array/record to another goroutine, call `Retain()`.
+When you're done with it, call `Release()`. When the count hits zero, memory is freed.
+
+## Common Pattern: NewRecord
+
+When building a `RecordBatch` from column arrays:
+
+```go
+// Build arrays
+idArr := idBuilder.NewArray()     // refcount = 1
+nameArr := nameBuilder.NewArray() // refcount = 1
+
+// NewRecord retains each array internally
+rec := array.NewRecord(schema, []arrow.Array{idArr, nameArr}, numRows)
+
+// Release the originals — the record owns them now
+idArr.Release()
+nameArr.Release()
+
+// ... use rec ...
+
+// When done with the record:
+rec.Release()  // releases its internal refs → arrays freed
+```
+
+Forgetting to release the original arrays is the most common leak.
+
+## Memory Allocators
+
+Arrow Go allocators track allocations:
+
+```go
+// Default: delegates to Go's built-in allocator
+alloc := memory.DefaultAllocator
+
+// Checked: wraps any allocator, tracks outstanding bytes
+checked := memory.NewCheckedAllocator(memory.DefaultAllocator)
+defer checked.AssertSize(t, 0)  // panic if leaked
+```
+
+Isotope uses `CheckedAllocator` in tests to catch leaks.
+
+## Leak Detection in Tests
+
+Isotope's test pattern:
+
+```go
+func TestFilterOperator(t *testing.T) {
+    alloc := memory.NewCheckedAllocator(memory.DefaultAllocator)
+    defer alloc.AssertSize(t, 0)  // Catches any leaked memory
+
+    batch := makeBatch(alloc, ...)
+    defer batch.Release()
+
+    result, _ := filterOp.ProcessBatch(ctx, batch)
+    defer result.Release()
+
+    // ... assertions ...
+}
+```
+
+If any array or record isn't properly released, `AssertSize` fails the test.
+
+## Pool Reuse
+
+For high-throughput operators, Arrow's buffer pool avoids repeated allocation:
+
+1. Allocate a 4KB buffer for a batch
+2. Process the batch
+3. Release the buffer → returns to the pool
+4. Next batch reuses the pooled buffer
+
+This amortizes allocation cost and reduces GC pressure, since pooled buffers are
+long-lived objects that survive GC cycles.
+
+## Why Not Just Use GC?
+
+Go's garbage collector is excellent for general-purpose use, but Arrow arrays can be
+large (megabytes per column). GC would need to scan and collect these large allocations,
+causing unpredictable pause spikes. Manual reference counting gives:
+
+- **Predictable latency**: Memory is freed immediately when the last reference drops
+- **No GC pressure**: Large arrays don't contribute to GC work
+- **Cross-language sharing**: The same memory layout works with C, Python, Java via Arrow

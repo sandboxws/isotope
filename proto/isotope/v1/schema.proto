@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package isotope.v1;
+
+option go_package = "github.com/sandboxws/isotope/runtime/internal/proto/isotopev1";
+
+// Arrow type enum — mirrors the TypeScript ArrowType enum in packages/dsl/src/core/types.ts.
+// Values start at 0 (UNSPECIFIED) so the Go zero-value is safe.
+enum ArrowType {
+  ARROW_TYPE_UNSPECIFIED = 0;
+  ARROW_TYPE_INT8 = 1;
+  ARROW_TYPE_INT16 = 2;
+  ARROW_TYPE_INT32 = 3;
+  ARROW_TYPE_INT64 = 4;
+  ARROW_TYPE_FLOAT32 = 5;
+  ARROW_TYPE_FLOAT64 = 6;
+  ARROW_TYPE_STRING = 7;
+  ARROW_TYPE_BINARY = 8;
+  ARROW_TYPE_BOOLEAN = 9;
+  ARROW_TYPE_TIMESTAMP_MS = 10;
+  ARROW_TYPE_TIMESTAMP_US = 11;
+  ARROW_TYPE_DATE32 = 12;
+  ARROW_TYPE_DECIMAL128 = 13;
+  ARROW_TYPE_LIST = 14;
+  ARROW_TYPE_MAP = 15;
+  ARROW_TYPE_STRUCT = 16;
+}
+
+// A single field within a schema.
+message SchemaField {
+  string name = 1;
+  // The Flink-style type string (e.g., "BIGINT", "TIMESTAMP(3)", "ARRAY<STRING>").
+  string flink_type = 2;
+  ArrowType arrow_type = 3;
+  bool nullable = 4;
+  // For DECIMAL: precision and scale.
+  int32 precision = 5;
+  int32 scale = 6;
+  // For LIST/MAP/STRUCT: nested field definitions.
+  repeated SchemaField children = 7;
+}
+
+// Watermark configuration for event-time processing.
+message WatermarkConfig {
+  string column = 1;
+  // SQL expression for the watermark (e.g., "ts - INTERVAL '5' SECOND").
+  string expression = 2;
+}
+
+// Primary key declaration for a schema.
+message PrimaryKeyConfig {
+  repeated string columns = 1;
+}
+
+// Complete schema definition for an operator's input or output.
+message Schema {
+  repeated SchemaField fields = 1;
+  WatermarkConfig watermark = 2;
+  PrimaryKeyConfig primary_key = 3;
+}

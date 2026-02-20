@@ -1,0 +1,195 @@
+syntax = "proto3";
+
+package isotope.v1;
+
+import "isotope/v1/schema.proto";
+
+option go_package = "github.com/sandboxws/isotope/runtime/internal/proto/isotopev1";
+
+// ── Source Configs ──────────────────────────────────────────────────
+
+message KafkaSourceConfig {
+  string topic = 1;
+  string bootstrap_servers = 2;
+  string format = 3; // "json" | "csv"
+  Schema schema = 4;
+  string startup_mode = 5; // "earliest-offset" | "latest-offset" | "group-offsets"
+  string consumer_group = 6;
+}
+
+message GeneratorSourceConfig {
+  Schema schema = 1;
+  int64 rows_per_second = 2;
+  int64 max_rows = 3; // 0 = unlimited
+}
+
+// ── Sink Configs ────────────────────────────────────────────────────
+
+message KafkaSinkConfig {
+  string topic = 1;
+  string bootstrap_servers = 2;
+  string format = 3; // "json" | "csv"
+  repeated string key_by = 4;
+}
+
+message ConsoleSinkConfig {
+  int32 max_rows = 1; // 0 = unlimited
+}
+
+// ── Stateless Transform Configs ─────────────────────────────────────
+
+message FilterConfig {
+  // Raw SQL condition (e.g., "amount > 100 AND country = 'US'").
+  string condition_sql = 1;
+}
+
+message MapConfig {
+  // Column mappings: output_name -> SQL expression.
+  map<string, string> columns = 1;
+}
+
+message FlatMapConfig {
+  // The array column to unnest.
+  string unnest_column = 1;
+  // Output schema for the unnested rows.
+  repeated SchemaField output_fields = 2;
+}
+
+message AggregateConfig {
+  repeated string group_by = 1;
+  // Aggregate expressions: output_name -> SQL expression (e.g., "SUM(amount)").
+  map<string, string> select = 2;
+}
+
+message RenameConfig {
+  // Mapping of old_name -> new_name.
+  map<string, string> columns = 1;
+}
+
+message DropConfig {
+  repeated string columns = 1;
+}
+
+message CastConfig {
+  // Column name -> target type.
+  map<string, SchemaField> columns = 1;
+}
+
+message CoalesceConfig {
+  // Column name -> SQL expression.
+  map<string, string> columns = 1;
+}
+
+message AddFieldConfig {
+  // Column name -> SQL expression.
+  map<string, string> columns = 1;
+  // Optional type hints for the added columns.
+  map<string, SchemaField> types = 2;
+}
+
+message UnionConfig {
+  // No additional config needed — schema compatibility is validated at compile time.
+}
+
+// ── Route ───────────────────────────────────────────────────────────
+
+message RouteBranch {
+  // SQL condition for this branch.
+  string condition_sql = 1;
+  // Operator ID of the first operator in this branch.
+  string target_operator = 2;
+}
+
+message RouteConfig {
+  repeated RouteBranch branches = 1;
+  // Operator ID for unmatched rows (optional).
+  string default_operator = 2;
+}
+
+// ── Deduplication and TopN ──────────────────────────────────────────
+
+message DeduplicateConfig {
+  repeated string key = 1;
+  string order = 2;
+  string keep = 3; // "first" | "last"
+}
+
+message TopNConfig {
+  repeated string partition_by = 1;
+  map<string, string> order_by = 2; // column -> "ASC" | "DESC"
+  int32 n = 3;
+}
+
+// ── Window Configs ──────────────────────────────────────────────────
+
+message TumbleWindowConfig {
+  string size = 1; // e.g., "5 MINUTE"
+  string time_column = 2; // The column to window on.
+}
+
+message SlideWindowConfig {
+  string size = 1;
+  string slide = 2;
+  string time_column = 3;
+}
+
+message SessionWindowConfig {
+  string gap = 1;
+  string time_column = 2;
+}
+
+// ── Join Configs ────────────────────────────────────────────────────
+
+message HashJoinConfig {
+  string condition_sql = 1; // e.g., "a.id = b.id"
+  string join_type = 2;     // "inner" | "left" | "right" | "full" | "anti" | "semi"
+  string state_ttl = 3;
+}
+
+message TemporalJoinConfig {
+  string condition_sql = 1;
+  string as_of = 2;
+}
+
+message LookupJoinConfig {
+  string table = 1;
+  string url = 2;
+  string condition_sql = 3;
+  map<string, string> select = 4;
+  LookupAsyncConfig async = 5;
+  LookupCacheConfig cache = 6;
+}
+
+message LookupAsyncConfig {
+  bool enabled = 1;
+  int32 capacity = 2;
+  string timeout = 3;
+}
+
+message LookupCacheConfig {
+  string type = 1; // "lru"
+  int64 max_rows = 2;
+  string ttl = 3;
+}
+
+message IntervalJoinConfig {
+  string condition_sql = 1;
+  string interval_from = 2;
+  string interval_to = 3;
+  string join_type = 4; // "inner" | "left" | "right" | "full"
+}
+
+// ── Escape Hatches & CEP ────────────────────────────────────────────
+
+message RawSQLConfig {
+  string sql = 1;
+}
+
+message MatchRecognizeConfig {
+  repeated string partition_by = 1;
+  map<string, string> order_by = 2;
+  string pattern = 3;
+  map<string, string> define = 4;
+  map<string, string> measures = 5;
+  string after_match = 6;
+}

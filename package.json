@@ -8,6 +8,8 @@
     "dev": "isotope dev"
   },
   "devDependencies": {
+    "@bufbuild/protobuf": "^2.11.0",
+    "@bufbuild/protoc-gen-es": "^2.11.0",
     "typescript": "^5.9.3"
   }
 }

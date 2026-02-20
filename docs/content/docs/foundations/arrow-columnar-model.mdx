@@ -1,0 +1,81 @@
+---
+title: Arrow Columnar Model
+description: "Column-major layout, null bitmaps, dictionary encoding, and why columnar matters for streaming."
+---
+
+# Arrow Columnar Model
+
+Apache Arrow defines a language-independent columnar memory format. Isotope uses Arrow
+as its in-memory data representation for all inter-operator data flow.
+
+## Why Columnar?
+
+Traditional row-major layout stores records contiguously:
+
+```
+Row-major:  [id=1, name="alice", age=30] [id=2, name="bob", age=25] ...
+```
+
+Columnar layout stores each column contiguously:
+
+```
+Column-major:
+  id:   [1, 2, 3, 4, ...]
+  name: ["alice", "bob", "charlie", "dave", ...]
+  age:  [30, 25, 35, 28, ...]
+```
+
+Benefits for streaming:
+- **Cache locality**: Operations on a single column hit consecutive cache lines
+- **SIMD vectorization**: Tight loops over primitive arrays auto-vectorize
+- **Compression**: Homogeneous data compresses better (run-length, dictionary encoding)
+- **Projection is free**: Selecting columns is just picking array pointers, no data copy
+
+## Arrow RecordBatch
+
+An Arrow `RecordBatch` is a table chunk: a schema plus a vector of column arrays sharing
+the same row count.
+
+```
+RecordBatch (4096 rows)
+├── Schema: {id: Int64, name: String, active: Boolean}
+├── Column 0 (Int64):   [1, 2, 3, 4, ..., 4096]
+├── Column 1 (String):  ["alice", "bob", ..., "zara"]
+└── Column 2 (Boolean): [true, false, true, ..., true]
+```
+
+Each column is a flat array — no indirection, no pointer chasing.
+
+## Null Bitmaps
+
+Arrow represents nulls with a separate validity bitmap (1 bit per value):
+
+```
+Values: [10, ?, 30, 40, ?, 60]
+Bitmap: [1,  0,  1,  1, 0,  1]  (0 = null)
+```
+
+This is more cache-friendly than sentinel values and avoids the "billion-dollar mistake"
+of nullable pointer types.
+
+## Dictionary Encoding
+
+For columns with few distinct values (like country codes), Arrow uses dictionary encoding:
+
+```
+Dictionary: ["US", "UK", "DE", "JP"]
+Indices:    [0, 2, 0, 1, 3, 0, 2, ...]  (2 bytes per value vs. variable-length strings)
+```
+
+This dramatically reduces memory and improves comparison speed (integer comparisons
+instead of string comparisons).
+
+## Arrow in Isotope
+
+In Isotope's Go runtime:
+
+- **RecordBatches** flow between operators via channels
+- **Filter** produces a boolean mask array, then calls `batch.Filter(mask)` — zero-copy
+- **Map** evaluates SQL expressions column-by-column using Arrow compute kernels
+- **Project** (column selection) reuses existing arrays — zero-copy schema change
+- **Memory management** uses reference counting (Retain/Release) — see the next chapter

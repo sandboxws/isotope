@@ -1,0 +1,45 @@
+---
+title: Foundations
+description: Deep-dive into the core concepts and technologies behind Isotope.
+---
+
+# Foundations
+
+This section provides an educational deep-dive into the core concepts and technologies
+that power Isotope. Each chapter focuses on a specific technology or design pattern,
+explaining both the theory and how Isotope uses it in practice.
+
+## Chapters
+
+<Cards>
+  <Card title="Goroutines & Channels" href="/docs/foundations/goroutines-and-channels">
+    Go's concurrency model: M:N scheduling, channel semantics, select, WaitGroups.
+  </Card>
+  <Card title="Arrow Columnar Model" href="/docs/foundations/arrow-columnar-model">
+    Column-major layout, null bitmaps, dictionary encoding, and why columnar matters.
+  </Card>
+  <Card title="Arrow Memory Management" href="/docs/foundations/arrow-memory-management">
+    Retain/Release reference counting, allocators, pool reuse, and leak detection.
+  </Card>
+  <Card title="Protobuf as Contract" href="/docs/foundations/protobuf-as-contract">
+    IDL design, field numbers, wire format, schema evolution between TS and Go.
+  </Card>
+  <Card title="Operator Model" href="/docs/foundations/operator-model">
+    The Operator interface, Open/Process/Close lifecycle, and operator chaining.
+  </Card>
+  <Card title="Kafka Consumer Internals" href="/docs/foundations/kafka-consumer-internals">
+    Consumer groups, offsets, rebalancing, and franz-go's pure Go implementation.
+  </Card>
+  <Card title="Expression Evaluation" href="/docs/foundations/expression-evaluation">
+    SQL parsing, AST walking, and Arrow kernel dispatch for columnar evaluation.
+  </Card>
+  <Card title="Batch Size Tuning" href="/docs/foundations/batch-size-tuning">
+    Amortization, GC pressure, cache locality, and latency percentiles.
+  </Card>
+  <Card title="Benchmarking Streaming Systems" href="/docs/foundations/benchmarking-streaming-systems">
+    YSB design, metrics collection, and Coordinated Omission.
+  </Card>
+  <Card title="DuckDB Micro-Batch" href="/docs/foundations/duckdb-micro-batch">
+    DuckDB architecture, Arrow bridge, and micro-batch tuning for SQL operators.
+  </Card>
+</Cards>

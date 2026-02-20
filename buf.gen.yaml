@@ -1,0 +1,12 @@
+version: v2
+plugins:
+  # Go stubs
+  - local: protoc-gen-go
+    out: runtime/internal/proto
+    opt: paths=source_relative
+
+  # TypeScript stubs (ES modules via @bufbuild/protoc-gen-es)
+  - local:
+      - node_modules/.bin/protoc-gen-es
+    out: packages/dsl/src/generated
+    opt: target=ts

@@ -1,0 +1,119 @@
+---
+title: Expression Evaluation
+description: "SQL parsing, AST walking, and Arrow kernel dispatch for columnar evaluation."
+---
+
+# Expression Evaluation
+
+Isotope evaluates SQL expressions (like `amount > 100 AND country = 'US'`) directly
+against Arrow RecordBatches. This chapter explains the three-stage pipeline.
+
+## Stage 1: SQL Parsing
+
+Expressions are parsed using [TiDB's SQL parser](https://github.com/pingcap/tidb/tree/master/pkg/parser),
+which produces a full SQL AST:
+
+```go
+// We wrap the expression in SELECT to get a valid SQL statement
+sql := "SELECT * FROM t WHERE " + exprSQL
+stmts, _ := parser.Parse(sql, "", "")
+// Extract the WHERE clause AST node
+whereExpr := stmts[0].(*ast.SelectStmt).Where
+```
+
+The parser handles the full SQL expression grammar: binary ops, function calls,
+CASE WHEN, IS NULL, subexpressions with parentheses, etc.
+
+## Stage 2: AST Walking
+
+The evaluator recursively walks the AST tree, dispatching each node type:
+
+```go
+func (ev *Evaluator) evalExpr(ctx context.Context, batch arrow.Record, expr ast.ExprNode) (arrow.Array, error) {
+    switch e := expr.(type) {
+    case *ast.ColumnNameExpr:
+        return ev.evalColumnRef(batch, e)    // Look up column array
+    case *test_driver.ValueExpr:
+        return ev.evalLiteral(batch, e)      // Create scalar array
+    case *ast.BinaryOperationExpr:
+        return ev.evalBinaryOp(ctx, batch, e) // Dispatch to kernel
+    case *ast.FuncCallExpr:
+        return ev.evalFuncCall(ctx, batch, e)  // UPPER, LOWER, etc.
+    // ...
+    }
+}
+```
+
+Each node evaluates to an Arrow Array — the result of applying that expression
+to every row in the batch simultaneously.
+
+## Stage 3: Arrow Compute Kernels
+
+For binary operations, we dispatch to Arrow's vectorized compute kernels:
+
+```go
+// Maps SQL operator → Arrow kernel name
+func kernelForOp(op opcode.Op) string {
+    switch op {
+    case opcode.EQ: return "equal"
+    case opcode.GT: return "greater"
+    case opcode.Plus: return "add"
+    // ...
+    }
+}
+
+// Call the kernel
+result, _ := compute.CallFunction(ctx, "equal", nil, left, right)
+```
+
+Arrow compute kernels are SIMD-optimized for primitive types — they process
+thousands of values per CPU cycle.
+
+## String Functions
+
+Arrow Go doesn't provide compute kernels for all string functions, so Isotope
+implements them manually with tight loops:
+
+```go
+func evalUpper(arr *array.String) *array.String {
+    builder := array.NewStringBuilder(alloc)
+    for i := 0; i < arr.Len(); i++ {
+        if arr.IsNull(i) {
+            builder.AppendNull()
+        } else {
+            builder.Append(strings.ToUpper(arr.Value(i)))
+        }
+    }
+    return builder.NewStringArray()
+}
+```
+
+Supported functions: `UPPER`, `LOWER`, `TRIM`, `CONCAT`, `SUBSTRING`, `REGEXP_EXTRACT`.
+
+## CASE WHEN Evaluation
+
+CASE expressions build a result array by evaluating conditions in order:
+
+```sql
+CASE WHEN amount > 1000 THEN 'high'
+     WHEN amount > 100  THEN 'medium'
+     ELSE 'low'
+END
+```
+
+The evaluator:
+1. Evaluates each WHEN condition → boolean mask
+2. Tracks which rows are already matched
+3. For unmatched rows, evaluates the THEN expression
+4. Fills remaining rows with the ELSE value
+
+## Type Coercion
+
+When operands have different types (e.g., `Int32 + Int64`), the evaluator
+promotes to the wider type before calling the compute kernel:
+
+```
+Int8 < Int16 < Int32 < Int64 < Float32 < Float64
+```
+
+This follows SQL's standard type promotion rules.

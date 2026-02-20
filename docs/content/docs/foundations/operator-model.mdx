@@ -1,0 +1,114 @@
+---
+title: Operator Model
+description: "The Operator interface, Open/Process/Close lifecycle, and operator chaining."
+---
+
+# Operator Model
+
+Every data transformation in Isotope is an **operator** — a unit of computation with
+a well-defined lifecycle and interface.
+
+## The Operator Interface
+
+```go
+type Operator interface {
+    Open(ctx *Context) error
+    ProcessBatch(ctx *Context, batch arrow.Record) (arrow.Record, error)
+    Close() error
+}
+```
+
+Three methods, three phases:
+1. **Open**: Initialize resources (compile expressions, allocate buffers)
+2. **ProcessBatch**: Transform one RecordBatch → produce one RecordBatch
+3. **Close**: Release resources
+
+## Source and Sink Interfaces
+
+Sources produce data; sinks consume it:
+
+```go
+type Source interface {
+    Open(ctx *Context) error
+    Run(ctx *Context, out chan<- arrow.Record) error
+    Close() error
+}
+
+type Sink interface {
+    Open(ctx *Context) error
+    WriteBatch(batch arrow.Record) error
+    Close() error
+}
+```
+
+Sources own the output channel lifecycle — they close it when done. Sinks receive
+batches until the channel closes.
+
+## Operator Context
+
+Every operator receives a `Context` with:
+
+```go
+type Context struct {
+    Ctx          context.Context    // Cancellation
+    Logger       *slog.Logger       // Structured logging
+    Metrics      *Metrics           // Counters for batches/rows/errors
+    Alloc        memory.Allocator   // Arrow memory allocator
+    OperatorID   string             // Unique ID in the plan
+    OperatorName string             // Human-readable name
+}
+```
+
+## Operator Lifecycle
+
+```
+┌──────┐     ┌─────────────┐     ┌───────┐
+│ Open │ ──→ │ ProcessBatch │ ──→ │ Close │
+└──────┘     │ (repeated)   │     └───────┘
+             └─────────────┘
+```
+
+1. **Open** is called once before any data flows
+2. **ProcessBatch** is called for each incoming RecordBatch
+3. **Close** is called after all data has been processed (or on error)
+
+Close is always called, even if ProcessBatch returns an error.
+
+## Operator Chaining (Fusion)
+
+When two operators are connected by a FORWARD edge and have the same parallelism,
+the engine can **fuse** them into a single goroutine:
+
+```
+Before fusion:
+  [Filter goroutine] --channel--> [Map goroutine]
+
+After fusion:
+  [Filter+Map goroutine]  (no channel, direct function call)
+```
+
+This eliminates channel overhead (synchronization, context switching) for consecutive
+stateless operators. The fused chain calls `ProcessBatch` sequentially:
+
+```go
+func (chain *FusedChain) ProcessBatch(ctx *Context, batch arrow.Record) (arrow.Record, error) {
+    result := batch
+    for _, op := range chain.operators {
+        var err error
+        result, err = op.ProcessBatch(ctx, result)
+        if err != nil {
+            return nil, err
+        }
+    }
+    return result, nil
+}
+```
+
+## Stateless vs. Stateful Operators
+
+**Stateless** operators (Filter, Map, Rename, Drop) process each batch independently.
+They use the ARROW_NATIVE execution strategy — pure Go code operating on Arrow arrays.
+
+**Stateful** operators (Aggregate, TumbleWindow, Join) maintain state across batches.
+They use the DUCKDB_MICRO_BATCH strategy — accumulating batches and flushing through
+DuckDB for SQL evaluation.

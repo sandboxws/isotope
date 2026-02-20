@@ -98,3 +98,7 @@ export type { MatchRecognizeProps, MatchAfterStrategy } from './components/cep.j
 // ── Components: query ────────────────────────────────────────────────
 export { Query } from './components/query.js';
 export type { QueryProps, QuerySelectProps, QueryWhereProps, QueryGroupByProps, QueryHavingProps, QueryOrderByProps, WindowSpec, WindowFunctionExpr, ColumnExpr } from './components/query.js';
+
+// ── Compiler: plan-compiler ─────────────────────────────────────────
+export { compilePlan } from './compiler/plan-compiler.js';
+export type { CompileOptions, CompileResult } from './compiler/plan-compiler.js';

@@ -1,0 +1,123 @@
+---
+title: DuckDB Micro-Batch
+description: "DuckDB architecture, Arrow bridge, and micro-batch tuning for SQL operators."
+---
+
+# DuckDB Micro-Batch
+
+Isotope uses DuckDB as an embedded SQL engine for stateful operators like windows
+and aggregations. This chapter explains the architecture and tuning.
+
+## Why DuckDB?
+
+Stateless operators (Filter, Map) work row-by-row or column-by-column. But
+stateful operators (Aggregate, TumbleWindow) need to group, sort, and accumulate
+data — exactly what SQL engines are designed for.
+
+DuckDB is an embedded OLAP database that:
+- Runs **in-process** (no network, no separate server)
+- Speaks **Arrow natively** (zero-copy data exchange)
+- Optimizes **columnar operations** (vectorized execution)
+- Supports **full SQL** (window functions, CTEs, joins)
+
+## The Arrow Bridge
+
+DuckDB can consume and produce Arrow data without serialization:
+
+```go
+// Arrow → DuckDB (zero-copy ingestion)
+arrowConn.RegisterView(recordReader, "input")
+
+// DuckDB → Arrow (zero-copy result)
+result, _ := arrowConn.QueryContext(ctx, "SELECT * FROM input WHERE ...")
+```
+
+The `RegisterView` function makes an Arrow RecordBatch available as a DuckDB
+table view. DuckDB reads directly from the Arrow memory buffers.
+
+## Micro-Batch Pattern
+
+Instead of running a SQL query for every incoming RecordBatch, the micro-batch
+operator accumulates batches and flushes periodically:
+
+```
+Incoming batches:  [B1] [B2] [B3] [B4] [B5] ...
+                    └────┬───────┘  └────┬───────┘
+                    Flush trigger    Flush trigger
+                         │               │
+                         ▼               ▼
+                    SQL query       SQL query
+                         │               │
+                         ▼               ▼
+                    Result batch    Result batch
+```
+
+The flush trigger can be:
+- **Count-based**: Every N batches (default: 4)
+- **Time-based**: Every T milliseconds
+- **Size-based**: When accumulated rows exceed a threshold
+
+## Instance Isolation
+
+Each operator gets its own DuckDB instance (`:memory:` database):
+
+```go
+type Instance struct {
+    db   *sql.DB
+    conn *sql.Conn     // Persistent connection for view scoping
+    alloc memory.Allocator
+}
+```
+
+Views are connection-scoped in DuckDB — `RegisterView` on one connection is not
+visible from another. Isotope keeps a persistent connection per instance to ensure
+the registered view is accessible when querying.
+
+## Memory Management
+
+DuckDB allocates memory through its C library, which is outside Go's garbage
+collector. Key configuration:
+
+```go
+// Limit DuckDB memory per instance
+db.Exec("SET memory_limit = '256MB'")
+```
+
+Arrow data produced by DuckDB uses DuckDB's own allocator, not Go's
+`memory.Allocator`. This means:
+- DuckDB results won't show up in Go's `CheckedAllocator` leak tracking
+- Memory limits must be configured via DuckDB's `SET memory_limit`
+- Each instance has independent memory tracking
+
+## Build Tag Gating
+
+DuckDB requires CGO (C compilation). Isotope gates it behind a build tag:
+
+```go
+//go:build duckdb
+
+package duckdb
+// Real implementation here
+```
+
+```go
+//go:build !duckdb
+
+package duckdb
+// Stub: returns ErrDuckDBNotAvailable
+```
+
+Build with DuckDB: `go build -tags duckdb ./...`
+Build without: `go build ./...` (default, pure Go)
+
+## Tuning Guidelines
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `memory_limit` | 256MB | Max DuckDB memory per instance |
+| `flush_count` | 4 | Batches accumulated before SQL flush |
+| Batch size | 1024 | Rows per incoming batch |
+
+- **Larger flush count** → Better query optimization, higher latency
+- **Smaller flush count** → Lower latency, more query overhead
+- **More memory** → Larger intermediate results, fewer spills to disk

@@ -69,4 +69,43 @@ export default (
     expect(plan.kind).toBe('Pipeline');
     expect(plan.props.name).toBe('test-pipeline');
   });
+
+  it('produces a protobuf .pb file alongside plan.json', async () => {
+    const pipelineDir = join(testDir, 'pipelines', 'pb-test');
+    mkdirSync(pipelineDir, { recursive: true });
+
+    writeFileSync(
+      join(pipelineDir, 'index.tsx'),
+      `
+import { Pipeline, GeneratorSource, ConsoleSink, Schema, Field } from '@isotope/dsl';
+
+const TestSchema = Schema({
+  fields: {
+    id: Field.BIGINT(),
+    value: Field.STRING(),
+  },
+});
+
+export default (
+  <Pipeline name="pb-test">
+    <GeneratorSource schema={TestSchema} rowsPerSecond={1}>
+      <ConsoleSink />
+    </GeneratorSource>
+  </Pipeline>
+);
+`,
+    );
+
+    await runSynth({
+      outdir: 'dist',
+      projectDir: testDir,
+    });
+
+    // Verify plan.pb was written
+    const pbPath = join(testDir, 'dist', 'pb-test', 'plan.pb');
+    expect(existsSync(pbPath)).toBe(true);
+
+    const pbContent = readFileSync(pbPath);
+    expect(pbContent.length).toBeGreaterThan(0);
+  });
 });
