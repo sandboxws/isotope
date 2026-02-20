@@ -3,7 +3,9 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "synth": "isotope synth",
+    "dev": "isotope dev"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
