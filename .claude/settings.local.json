@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(du:*)",
+      "Bash(xargs:*)",
+      "Bash(openspec schemas:*)",
+      "Bash(openspec new change:*)",
+      "Bash(openspec status:*)",
+      "Bash(openspec instructions proposal:*)",
+      "Bash(openspec instructions specs:*)",
+      "Bash(openspec instructions design:*)",
+      "Bash(openspec instructions tasks:*)",
+      "Bash(openspec list:*)",
+      "Bash(openspec instructions apply:*)",
+      "Bash(pnpm --version:*)",
+      "Bash(node --version:*)",
+      "Bash(go version:*)",
+      "Bash(ls:*)",
+      "Bash(openspec:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm build:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
